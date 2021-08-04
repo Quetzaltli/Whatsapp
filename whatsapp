@@ -1,0 +1,510 @@
+
+##Descargar librerías:
+
+```{r}
+library(tidytext)
+library(tidyverse)
+library(rvest)
+library(quanteda)
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(purrr)
+library(tibble)
+library(tidyquant)
+library(janeaustenr)
+library(readr)
+library(knitr)
+library(wordcloud)
+library(tm)
+library(widyr)
+
+```
+
+##1. Abrir todos los archivos
+
+```{r}
+base1 <- map_df(list.files("Chats cierre/", full.names = TRUE), read_csv, col_names=FALSE)
+```
+
+##2. Crear una base de datos limpia por idea (mismo usuario, misma hora)
+
+```{r}
+base1<- base1 %>%
+  filter(X1!=" ")%>%
+  mutate(fecha= as.Date(str_extract(X1, "\\d{1,2}\\/\\d{1}\\/\\d{2}"), format="%d/%m/%Y"))%>%
+  mutate(hora= str_extract(X1, "\\d{1,2}\\:\\d{1,2}"))%>% 
+  ##mutate(preguntas=str_extract(X1,"\\¿(.*?)\\?"))%>%
+  mutate(emisor=str_extract(X1,"\\-(.*?)\\:"))%>%
+  mutate(id=seq(1:25526))%>%
+  filter(id!=1)%>%
+  select(X1, fecha, hora, emisor)%>%
+  mutate(emisor=na.locf(emisor))%>% 
+  mutate(fecha= na.locf(fecha))%>%
+  mutate(hora= na.locf(hora))%>%
+  group_by(emisor, fecha, hora)%>%
+  summarise(contenido =paste(X1,collapse = ""))%>%
+  mutate(contenido = str_trim(contenido, side="both"))%>%
+  mutate(contenido = str_squish(contenido)) %>% 
+  mutate(contenido = gsub("\\d{1,2}\\/\\d{1}\\/\\d{2}","", contenido)) %>% 
+  mutate(contenido = gsub("\\d{1,2}\\:\\d{1,2}","", contenido)) %>%
+  mutate(contenido = gsub("\\d{9}","", contenido))%>%
+  mutate(contenido = gsub("\\d{6}","", contenido))%>%
+  mutate(contenido = gsub("a. m.","", contenido)) %>%
+  mutate(contenido = gsub("p. m.","", contenido)) %>%
+  mutate(contenido = gsub("\\-(.*?)\\:", "", contenido))%>%
+  mutate(contenido = gsub('\\p{So}|\\p{Cn}', '', contenido, perl = TRUE))%>%
+  mutate(contenido = gsub(".*_", "", contenido))%>%
+  mutate(contenido = gsub("<Multimedia omitido>", "", contenido))%>%
+  mutate(contenido = gsub("^[ \t]+|[ \t]+$", "", contenido))%>%
+  mutate(contenido = gsub("- Los mensajes y llamadas en este chat ahora están protegidos con cifrado de extremo a extremo. Toca para más información.", "", contenido))%>%
+  filter(hora!= "4:6")%>%
+  filter(contenido!="")%>%
+  mutate(contenido = gsub("- Los mensajes y llamadas en este chat ahora están protegidos con cifrado de extremo a extremo. Toca para más información.", "", contenido))%>%
+  filter(contenido!="")
+
+
+```
+
+
+### Reporte de usuarios
+```{r}
+ 
+usuarios <- unique(base1$emisor)
+write.csv(usuarios, "usuarios.csv")
+
+```
+
+###Descargar base de datos de usuarios y hacer innerjoin con la base que se vaya a trabajar
+```{r}
+
+base1 <- base1%>%
+  inner_join(usgr, by="emisor")%>%
+  filter(idusuario!=0 & grupo!=0)
+
+```
+
+##Construir un único vector basura
+
+```{r}
+basura<- c("Gentopia:", 0:6700, "00", "09", "08", "01", "02", "03", "2019", "06", "04", "05", "07", "a", "p", "m", "finn", "gentopia", "humana", "https", "gracias", "hola", "bien", "Videollamda",  "pues", "claro", "xq", "día", "ljeres", "personas", "persona", "sy", "asy", "ay", "www.facebook.com", "ah", "ce","event_time_id", "así", "sip", "ke", "cómo", "elizabeth", "mui", "events", "NA", "", "ola", "í", "ala", "xq", "xk", "xfa", "nunka", "sólo","4	26b94a3a1d198f45a60256cd33", "26b94a3a1d198f45a60256cd33", "jajaja", "jaja", "ja", "jajajaja", "aa", "holiii", "holaaa", "holaaaa", "holix", "holi", "mmmm", "mmmmm", "mmm", "www.imdb.com", "10.1080", "11.2019.9", "18en", "	1atutj8cby8", "1dsg4cwdogyq6lfnca9ppx", "1ny7bwylcryubeyxrimfkm", "1v16rjyxyn350", "2kl9fbe", "46azoeyy3b8xthcrzlfisd", " 4a", "90.9", "1atutj8cby8", "	7exe0ruc8b0jsi3umufnfo", "7exe0ruc8b0jsi3umufnfo", "aaaahhh", "6mese", "5años", "	4a", "días", "Mmmmmm", "Mmm", "hacia", "p0r", "uo", "aunque", "noches", "dias", "track")
+
+custom_stop_words <- bind_rows(stop_words,
+                      tibble(word = tm::stopwords("spanish"),
+                       lexicon = "custom"))%>%
+  filter(word!="no")%>%
+  filter(word!="sí")
+
+```
+
+
+###Las cien palabras más dichas, se debe poner ungroup para poder dar el total
+```{r}
+
+
+palabras<- base1%>%
+  ungroup()%>%
+  select(contenido)%>%
+  unnest_tokens(word, contenido)%>%
+  anti_join(custom_stop_words)%>%
+  filter(!word %in% basura)%>%
+  count(word)%>%
+  arrange(n)
+
+wordcloud(words= palabras$word, freq = palabras$n, min.freq = 15,scale = c(4, 0.2),
+          max.words=100, random.order=FALSE, rot.per=.5, colors = c("#559900", "#cc181e", "#666666", "#2793e8"))
+
+
+```
+##bigramas
+
+```{r}
+bigramasr<- base1%>%
+  ungroup()%>%
+  select(contenido)%>%
+  unnest_tokens(word, contenido, token = "ngrams", n = 2) %>% 
+  separate(word, c("word1", "word2"), sep=" ") %>% 
+  filter(!word1 %in% custom_stop_words$word) %>% 
+  filter(!word1 %in% basura) %>%
+  filter(!word2 %in% custom_stop_words$word) %>% 
+  filter(!word2 %in% basura)%>%
+  count(word1, word2, sort=TRUE)
+  
+bigramas<- bigramasr%>%
+  unite (bigram, word1, word2, sep = " " )%>%
+  filter(bigram!="si si")%>%
+  filter(bigram!="no no")%>%
+  filter(bigram!= "NA NA")%>%
+  filter(bigram!= "linda tarde")%>%
+  filter(bigram!= "linda noche")
+
+
+library(igraph)
+  
+bigram_graph <- bigramasr %>%
+  top_n(70)%>%
+  graph_from_data_frame()
+
+library(ggraph)
+set.seed(2017)
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(color = "#ff864e", show.legend = FALSE) +
+  geom_node_point(color = "#ff864e", size = 2) +
+  geom_node_text(aes(label = name, check_overlap = FALSE)) + ggtitle("Bigramas más frecuentes en el Grupo")  + theme_void()
+ggsave("bigramas.jpg")
+
+bigraplot<- bigramas%>%
+  filter(bigram!="si si")%>%
+  filter(bigram!="sí sí")%>%
+  filter(bigram!="no no")%>%
+  top_n(30)
+
+ggplot(data=bigraplot, aes(y=n, x=reorder(bigram, desc(n))))+ geom_col(fill = "#ff864e")+
+coord_flip()+ xlab("")+ ylab("")
+ggsave("bigramas en barras.jpg")
+
+```
+
+##Las correlaciones van por mensaje y fecha!!
+```{r}
+pair <- base1%>%
+  group_by(emisor, fecha)%>%
+  summarise(contenido =paste(contenido, collapse = ""))%>%
+  ungroup()%>%
+  mutate(id=seq(1:1156))%>%
+ unnest_tokens(word, contenido)%>%
+anti_join(custom_stop_words)%>%
+filter(!word %in% basura)%>%
+pairwise_count(word, id, sort=TRUE)
+
+```
+```{r}
+pair1<- pair%>%
+  filter(item1 %in% c("discriminación", "estereotipos", "estereotipo", "machismo", "ser", "acuerdo", "acoso", "verdad", "diferencias", "libertad", "género", "trabajo"))%>%
+  group_by(item1) %>%
+  mutate(rangos=rank(n, ties.method = "first"))%>%
+  top_n(8)%>%
+  arrange(rangos)
+  
+pair2<- pair%>%
+  filter(item1 %in% c("discriminación", "hombres", "difícil", "sexo", "educación", "edad", "interesante", "hacer", "verdad", "poder", "sexualidad", "violencia" ))%>%
+  group_by(item1) %>%
+  mutate(rangos=rank(n, ties.method = "first"))%>%
+  top_n(8)%>%
+  arrange(rangos)
+
+ggplot(data= pair1, aes(x = reorder(item2, n), y = n), fill=item1) + 
+  geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ item1, scales = "free")  + coord_flip() + ggtitle("Co-ocurrencia entre palabras clave")+ ylab("")+ xlab("")+ theme(axis.text.x=element_text(size=7), axis.text.y = element_text(size=7))
+
+ggsave("coocurrencia.png", width = 8, height = 6, dpi = 400, units = "in", device='png')
+```
+```{r}
+
+ggplot(data= pair2, aes(x = reorder(item2, n), y = n), fill=item1) + 
+  geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ item1, scales = "free")  + coord_flip() + ggtitle("Co-ocurrencia entre palabras clave")+ ylab("")+ xlab("")+ theme(axis.text.x=element_text(size=7), axis.text.y = element_text(size=7))
+
+ggsave("coocurrencia1.png", width = 10, height = 6, dpi = 400, units = "in", device='png')
+```
+
+```{r}
+bigram_graph1 <- pair%>%
+  filter(item1 %in% c("mujer", "hombre", "feminista", "machismo", "creo", "acuerdo", "acoso", "violencia", "estereotipos", "diferencias", "libertad", "género", "trabajo"))%>%
+  group_by(item1) %>%
+  mutate(rangos=rank(n, ties.method = "first"))%>%
+  top_n(20)%>%
+  graph_from_data_frame()
+
+library(ggraph)
+set.seed(2017)
+
+ggraph(bigram_graph1, layout = "fr") +
+  geom_edge_link(color = "#ff864e", show.legend = FALSE) +
+  geom_node_point(color = "#ff864e", size = 2) +
+  geom_node_text(aes(label = name, check_overlap = FALSE), repel=TRUE) + ggtitle("Co-ocurrencias más frecuentes en el Grupo")  + theme_void()
+ggsave("coorrelaciones.jpg")
+
+
+```
+
+##Emociones
+
+```{r}
+Emocionesunic <- NRRR%>%
+  select(`Spanish (es)`, Positive, Negative, Anger, Anticipation, Disgust, Fear, Joy, Sadness, Surprise, Trust)%>%
+  rename(word=`Spanish (es)`)%>%
+  gather(Sentimiento, Puntos, Positive:Trust, factor_key=TRUE)%>%
+  filter(Puntos==1)
+
+Emocionesunic <- Emocionesunic[!duplicated(Emocionesunic$word),] 
+  
+```
+
+
+```{r}
+
+Emocionesp <- NRRR%>%
+  select(`Spanish (es)`, Positive, Negative, Anger, Anticipation, Disgust, Fear, Joy, Sadness, Surprise, Trust)%>%
+  rename(word=`Spanish (es)`)%>%
+  gather(Sentimiento, Puntos, Positive:Trust, factor_key=TRUE)
+  
+  
+
+ 
+palabrase <- palabras%>%
+ inner_join(Emocionesp)%>%
+  gather(Sentimiento, Puntos, Positive:Trust, factor_key=TRUE)%>%
+  mutate(Total=Puntos*n)%>%
+  filter(Puntos!=0)%>%
+  mutate(Sentimiento = gsub("Positive","Positivo", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Negative","Negativo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Anger","Enojo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Anticipation","Predisposición", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Disgust","Disgusto", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Fear","Miedo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Joy","Alegría", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Sadness","Tristeza", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Surprise","Sorpresa", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Trust","Confianza", Sentimiento))%>%
+  group_by(word, Sentimiento)%>%
+  unique()%>%
+  ungroup %>%
+  group_by(Sentimiento)%>%
+  arrange()%>%
+  top_n(7)%>%
+  ungroup%>%
+  mutate(Sentimiento = gsub("Positive","Positivo", Sentimiento))
+
+  ##replace(palabrase$Sentimiento, c("Positive", "Negative", "Anger", "Anticipation", "Disgust", "Fear", "Joy", "Sadness", "Surprise", "Trust"), 
+  
+ggplot(data=palabrase, aes(x = reorder(word, desc(Total)), y = Total), fill=Sentimiento) + 
+  geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ Sentimiento, scales = "free") + coord_flip() + ggtitle("Palabras que detonaron más emociones")+ ylab("Emociones")+ xlab("")+ theme(axis.text.x=element_text(angle = 90), axis.text.y = element_text(size=7))
+
+ggsave ("emociones.jpg")
+
+```
+```{r}
+palabrasporusuario<- base1%>%
+  group_by(emisor)%>%
+  unnest_tokens(word, contenido)%>%
+  count(word, sort = TRUE)%>%
+  anti_join(custom_stop_words)%>%
+  filter(!word %in% basura)%>%
+  summarise(palabrasusuario=sum(n))
+  
+ Sentimientosusuarios<- base1%>%
+  group_by(emisor)%>%
+  unnest_tokens(word, contenido)%>%
+  count(word, sort = TRUE)%>%
+  anti_join(custom_stop_words)%>%
+  filter(!word %in% basura)%>%
+  inner_join(Emocionesunic)%>%
+  ##gather(Sentimiento, Puntos, Positive:Trust, factor_key=TRUE)%>%
+  ungroup()%>%
+  filter(Puntos!=0)%>%
+ group_by(emisor, word, Sentimiento)%>%
+  mutate(totalp=n*Puntos)%>%
+   full_join(palabrasporusuario)
+  ##summarise(Puntostotales=sum(Total))%>%
+  ##collapse()%>%
+  ##tbl_df()
+ 
+ 
+
+```
+
+
+```{r}
+Ponderacion <- Sentimientosusuarios%>%
+  group_by(word)%>%
+  summarise(personas=n())%>%
+  full_join(Sentimientosusuarios)
+write.csv(Ponderacion, "ponderacion.csv")
+```
+
+ ungroup %>%
+  group_by(Sentimiento)%>%
+  arrange()%>%
+  top_n(7)%>%
+  ungroup%>%
+  mutate(Sentimiento = gsub("Positive","Positivo", Sentimiento))
+
+  ##replace(palabrase$Sentimiento, c("Positive", "Negative", "Anger", "Anticipation", "Disgust", "Fear", "Joy", "Sadness", "Surprise", "Trust"), 
+  
+ggplot(data=palabrase, aes(x = reorder(word, desc(Total)), y = Total), fill=Sentimiento) + 
+  geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ Sentimiento, scales = "free") + coord_flip() + ggtitle("Palabras que detonaron más emociones")+ ylab("Emociones")+ xlab("")+ theme(axis.text.x=element_text(angle = 90), axis.text.y = element_text(size=7))
+
+
+
+```{r}
+Pond<- Ponderacion%>%
+  select(word, personas, emisor, n)%>%
+  filter(personas <= 4)%>%
+  group_by(emisor)%>%
+  mutate(rangos=rank(personas, ties.method = "first"))%>%
+  filter(rangos <= 10)%>%
+  arrange(n)%>%
+  top_n(-6)%>%
+  filter(emisor %in% c( "- Adeux:",
+"- Adriana:",
+"- Ame:",
+"- Ana Lilia:",
+"- Andrea:",
+"- Augusto:",
+"- Berenice:",
+"- Ceci Franco:",
+"- Claudia O:",
+"- Claudia:",
+"- Daniel:",
+"- Diego:",
+"- Dolores:",
+"- EB:",
+"- Erika:", "- Euphrasina:"))
+  
+ggplot(data=Pond, aes(x = reorder(word, desc(n)), y = personas), fill=emisor) + 
+  geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ emisor, scales = "free_y") + coord_flip() + ggtitle("Palabras propuestas para descifrar el ADN GENTOPIANO")+ ylab("Emociones")+ xlab("")+ theme(axis.text.x=element_text(angle = 90), axis.text.y = element_text(size=9))
+
+ggsave("ADNGentopiano1.jpg")
+
+```
+
+
+
+
+```{r}
+bpl <- Sentimientosusuarios%>%
+  group_by(emisor, Sentimiento, palabrasusuario)%>%
+  summarise(totalp=sum(totalp))%>%
+  mutate(indice=((totalp/palabrasusuario)*100))%>%
+  ungroup()%>%
+  mutate(Sentimiento = gsub("Positive","Positivo", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Negative","Negativo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Anger","Enojo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Anticipation","Predisposición", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Disgust","Disgusto", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Fear","Miedo", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Joy","Alegría", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Sadness","Tristeza", Sentimiento))%>%
+   mutate(Sentimiento = gsub("Surprise","Sorpresa", Sentimiento))%>%
+  mutate(Sentimiento = gsub("Trust","Confianza", Sentimiento))
+
+bpl1<- bpl%>%
+  select(emisor, Sentimiento, indice)%>%
+  group_by(Sentimiento)%>%
+  arrange(indice)
+  
+ggplot(data=bpl1, aes(x=Sentimiento, y=indice)) +geom_boxplot(fill= "#ff864e") + coord_flip()+ ggtitle("Distribución de sentimientos de los usuarios")
+
+ggsave("Distribucióndeemociones.jpg")
+
+write.csv(bpl1, "bpl1.csv")
+
+##ggplot(data=bpl1, aes(x = reorder(emisor, desc(indice)), y = indice), fill=Sentimiento) + 
+  #3geom_bar(stat = "identity", fill= "#ff864e") + facet_wrap(~ Sentimiento, scales = "free") + coord_flip() + ggtitle("Personas más emotivas por sentimiento")+ ylab("Porcentaje de Palabras Emocionales")+ xlab("")+ theme(axis.text.x=element_text(angle = 90), axis.text.y = element_text(size=7))
+
+##ggsave("Emocionalidad por persona.jpg")
+```
+
+```{r}
+library(ggridges)
+
+ggplot(bpl1, aes(x=indice, y=Sentimiento, fill=..x..)) +
+  geom_density_ridges_gradient(gradient_lwd = 0.5, fill="#ff864e") +
+  geom_vline(xintercept = 0, linetype="dotted") + ggtitle("Distribución de las emociones de los usuarios")
+
+ggsave("Distribucion de las emociones.jpg")
+  
+
+```
+
+
+```{r}
+library(BBmisc)
+
+  
+matriz<- Sentimientosusuarios%>%
+ filter(!word %in% c("sí", "tipo", "pregunta", "bastante", "forma", "recibido", "completamente", "propio", "presente", "médico", "información"))%>%
+  select(emisor, word, n)%>%
+  cast_dfm(emisor, word, n)
+  
+  
+write.csv(matriz, "matriz.csv")
+
+
+##ggplot(matriz, aes(x=idusuario, y=word, fill=n))+
+  ##geom_tile() + xlab("id usuarios") + ylab("") + ggtitle("50 Palabras más repetidas en Gentopia por ID Usuario")+ theme(title = element_text(color = "black")) +
+  #3scale_fill_gradient2(high = "black",
+    ##                   mid = "#ff864e", name="Veces repetidas") +
+ #3theme(axis.text.x = element_text(angle = 90,size = 6 , hjust = 0))+ theme(axis.text.y = element_text(size = 7 , hjust = .5)) + theme(panel.grid.major = element_line(colour = "gray"))
+
+##ggsave("matriz.png", width=12, height=5, dpi=100)
+
+```
+```{r}
+matriz<- base1%>%
+  group_by(emisor)%>%
+  summarise(contenido =paste(contenido,collapse = ""))%>%
+  unnest_tokens(word, contenido)
+
+matriz <- matriz%>%
+  group_by(emisor)%>%
+  count(word)%>%
+  anti_join(custom_stop_words)%>%
+  filter(!word %in% basura)%>%
+  inner_join(Regresion)%>%
+  select(emisor, word, n)
+
+
+matrizc<- matriz%>%
+  rename(text=word, docnames=emisor)%>%
+  cast_dtm(docnames, text, n)
+
+tdm.tfidf<- weightTfIdf(matrizc)
+tdm.tfidf <- removeSparseTerms(tdm.tfidf, 0.999)           ###weight la convierte de 0 a 1###
+tfidf.matrix<- as.matrix(tdm.tfidf)                   ###La ponemos cómo matriz##
+dist.matrix = proxy::dist(tfidf.matrix,method="Euclidean")
+
+clus.hier <- hclust(dist.matrix, method="ward.D2")
+plot(clus.hier)
+
+dist.matrix
+```
+Modelo
+```{r}
+mod<- bpl%>%
+  inner_join(Pruebare)%>%
+  select(emisor, Sentimiento, palabrasusuario, totalp, X17)%>%
+  spread(Sentimiento, totalp, fill = 0)%>%
+  mutate(Pos=(Positivo-Negativo)/palabrasusuario)%>%
+  mutate(Porcentajep= Positivo/palabrasusuario)%>%
+  mutate(Porcentajen= Negativo/palabrasusuario)
+
+```
+```{r}
+
+m1 <- lm(mod$X17~ mod$Pos)
+m1$coefficients
+summary(m1)
+plot(m1)
+ ggplot(mod, aes(x=Pos, y=X17)) +
+  geom_point() +
+  geom_smooth(method = "lm") + ggtitle("Regresión líneal entre puntaje y Positivo-Negativo") + xlab("Positivo-Negativo") + ylab("Puntaje machismo")
+ ggsave("Regresion1.jpg")
+   
+```
+
+
+```{r}
+m2 <- lm(mod$X17~ mod$Porcentajep + mod$Porcentajen)
+m2$coefficients
+summary(m2)
+plot(m2)
+ ggplot(mod, aes(x=Porcentajep, y=X17)) +
+  geom_point() +
+  geom_smooth(method = "lm") + ggtitle("Regresión líneal entre puntaje y positivo") + xlab("Positivo-Negativo") + ylab("Puntaje machismo")
+ ggsave("Regresionlineal.jpg")
+
+
+```
+
